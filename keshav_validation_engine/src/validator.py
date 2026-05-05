@@ -1,93 +1,106 @@
 import copy
-from typing import Dict, Any
-
+from typing import Dict, Any, Callable
 from .utils import canonical_hash, ensure_immutable, safe_copy
-from .rules import (
-    validate_schema,
-    check_constraint_propagation,
-    check_propagation_bottleneck,
-    check_root_cause,
-    check_unsatisfied_dependencies
-)
+from .rules import TANTRARules
 
-def _run_validation_logic(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Runs the core logical validation and returns structured results."""
-    violations = []
-    
-    # Phase 2
-    violations.extend(check_constraint_propagation(data))
-    # Phase 3
-    violations.extend(check_propagation_bottleneck(data))
-    # Phase 4
-    violations.extend(check_root_cause(data))
-    # Phase 5
-    violations.extend(check_unsatisfied_dependencies(data))
-    
-    # Check booleans for consistency_checks field
-    constraint_propagation = not any(v["type"] == "CONSTRAINT_PROPAGATION_MISMATCH" for v in violations)
-    propagation_bottleneck = not any(v["type"] == "BOTTLENECK_INVALID" for v in violations)
-    root_cause_valid = not any(v["type"] == "INVALID_ROOT_CAUSE" for v in violations)
-    dependency_integrity = not any(v["type"] == "DEPENDENCY_MISMATCH" for v in violations)
-    
+def diagnose_failure(payload: Dict[str, Any], layer_error: str = None) -> Dict[str, Any]:
+    """Phase 4: Failure Diagnostics Engine"""
+    layer = "UNKNOWN"
+    reason = "Validation failed"
+    task_id = payload.get("keshav_output", {}).get("blocked_task_id", "UNKNOWN")
+    trace_id = payload.get("trace_id", "UNKNOWN")
+
+    if layer_error == "CONSTRAINT_LAYER" or payload.get("constraint_layer", {}).get("status") == "FAIL":
+        layer = "CONSTRAINT_LAYER"
+        reason = "Constraint validation failed upstream"
+    elif layer_error == "PROPAGATION_LAYER" or payload.get("propagation_layer", {}).get("status") == "FAIL":
+        layer = "PROPAGATION_LAYER"
+        reason = "Propagation failure detected upstream"
+    else:
+        layer = "KESHAV_OUTPUT_LAYER"
+        reason = layer_error if layer_error else "KESHAV processing failure"
+
     return {
-        "violations": violations,
-        "consistency_checks": {
-            "constraint_propagation": constraint_propagation,
-            "propagation_bottleneck": propagation_bottleneck,
-            "root_cause_valid": root_cause_valid,
-            "dependency_integrity": dependency_integrity
-        }
+        "status": "FAIL",
+        "layer": layer,
+        "reason": reason,
+        "task_id": task_id,
+        "trace_id": trace_id
     }
 
-def validate_pipeline(input_data: Dict[str, Any]) -> Dict[str, Any]:
+def validate_pipeline(pipeline_fn: Callable, initial_payload: Dict[str, Any], iterations: int = 10) -> Dict[str, Any]:
     """
     Main entry point for Deterministic Validation Engine.
-    Produces strictly formatted OUTPUT CONTRACT JSON.
+    Executes Phase 2, 4, 5, 7 logic.
     """
-    # Phase 1: Schema Validation (Throws exception if invalid)
-    validate_schema(input_data)
+    working_input = safe_copy(initial_payload)
+    outputs = []
     
-    # We must ensure immutability
-    working_data = safe_copy(input_data)
-    
-    # Phase 6: Determinism
-    res1 = _run_validation_logic(working_data)
-    res2 = _run_validation_logic(safe_copy(input_data))
-    res3 = _run_validation_logic(safe_copy(input_data))
-    
-    is_deterministic = (
-        canonical_hash(res1) == canonical_hash(res2) and
-        canonical_hash(res2) == canonical_hash(res3)
-    )
-    
-    # Phase 7: Replay Validation
-    res_replay = _run_validation_logic(safe_copy(input_data))
-    replay_match = (canonical_hash(res1) == canonical_hash(res_replay))
-    
-    violations = list(res1["violations"])
-    if not is_deterministic:
-        violations.append({
-            "type": "NON_DETERMINISTIC",
-            "task_id": "SYSTEM",
-            "reason": "Validation logic produced varying outputs across repeated runs."
-        })
-    if not replay_match:
-        violations.append({
-            "type": "REPLAY_MISMATCH",
-            "task_id": "SYSTEM",
-            "reason": "Replay execution mismatched primary execution output."
-        })
-        
-    # Phase 10 validation: Input Immutability
-    # This checks if the act of running validation accidentally modified input_data.
-    # Note: the test suite should ideally verify this, but adding a check here for completeness.
-    # If the user passed us something that mutated, we can flag it. (But `working_data` is used so it shouldn't)
+    # Phase 2 & 5: Run multiple times and verify immutability
+    for i in range(iterations):
+        exec_input = safe_copy(working_input)
+        try:
+            output = pipeline_fn(exec_input)
+        except Exception as e:
+            # If pipeline crashes completely
+            return diagnose_failure(working_input, str(e))
+            
+        # Phase 5: Input Immutability Proof
+        if not ensure_immutable(working_input, exec_input):
+            return {
+                "deterministic": False,
+                "reason": "INPUT_MUTATION_DETECTED"
+            }
+        outputs.append(output)
 
-    # Phase 8: Diagnostic Output Generation
+    # Phase 2: Byte-identical outputs across runs
+    first_output_hash = canonical_hash(outputs[0])
+    for idx, out in enumerate(outputs[1:]):
+        if canonical_hash(out) != first_output_hash:
+            return {
+                "deterministic": False,
+                "reason": "NON_DETERMINISTIC_OUTPUT",
+                "diff": f"Mismatch at iteration {idx+2}"
+            }
+
+    # Analyze the deterministic output
+    final_output = outputs[0]
+    keshav_out = final_output.get("keshav_output", {})
+
+    # Phase 4 Diagnostics Checks (Are upstream layers healthy?)
+    try:
+        TANTRARules.validate_layers(final_output)
+    except RuntimeError as e:
+        return diagnose_failure(final_output, str(e))
+        
+    # Phase 1 & 3: TANTRA Schema and Trace Integrity Validation
+    try:
+        TANTRARules.validate_schema(keshav_out)
+        TANTRARules.validate_trace_integrity(working_input.get("trace_id", ""), keshav_out)
+    except ValueError as e:
+        if "Schema mismatch" in str(e) or "Ordering inconsistency" in str(e):
+            return {
+                "deterministic": False,
+                "reason": "SCHEMA_VIOLATION",
+                "failed_field": str(e)
+            }
+        elif "Trace ID" in str(e):
+            return {
+                "deterministic": False,
+                "reason": "TRACE_VIOLATION"
+            }
+        else:
+            return diagnose_failure(final_output, str(e))
+    except TypeError as e:
+        return {
+            "deterministic": False,
+            "reason": "SCHEMA_VIOLATION",
+            "failed_field": str(e)
+        }
+        
+    # Phase 7: PASS
     return {
-        "execution_id": str(input_data.get("execution_id")),
-        "deterministic": is_deterministic,
-        "replay_match": replay_match,
-        "violations": violations,
-        "consistency_checks": res1["consistency_checks"]
+        "status": "PASS",
+        "deterministic": True,
+        "valid": True
     }

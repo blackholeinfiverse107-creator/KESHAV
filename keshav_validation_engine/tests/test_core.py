@@ -1,72 +1,123 @@
 import pytest
 from src.validator import validate_pipeline
-from src.rules import validate_schema
 
-def get_valid_input():
+def get_valid_payload():
     return {
-        "execution_id": "test_exec_1",
-        "tasks": [
-            {"task_id": "A", "status": "DONE"},
-            {"task_id": "B", "status": "PENDING", "depends_on": ["A"]},
-            {"task_id": "C", "status": "PENDING", "depends_on": ["B"]}
-        ],
-        "constraint_results": [
-            {"task_id": "B", "is_valid": False, "unsatisfied_dependencies": ["A"]},
-            {"task_id": "C", "is_valid": False, "unsatisfied_dependencies": ["B"]}
-        ],
-        "propagation_results": [
-            {"task_id": "B", "affected_tasks": ["C"], "impact_score": 10},
-            {"task_id": "C", "affected_tasks": [], "impact_score": 5}
-        ],
-        "bottleneck_output": {
-            "task_id": "B",
-            "root_cause": "A",
-            "impact_score": 10
+        "trace_id": "tr_123",
+        "constraint_layer": {"status": "SUCCESS"},
+        "propagation_layer": {"status": "SUCCESS"},
+        "keshav_output": {
+            "blocked_task_id": "task_A",
+            "root_cause": "task_A",
+            "impacted_tasks": ["task_B", "task_C"],
+            "impact_score": 150,
+            "severity": "HIGH",
+            "resolution_signal": "AUTO_RESTART",
+            "trace_id": "tr_123",
+            "timestamp": "2026-05-05T10:00:00Z"
         }
     }
 
-def test_phase1_schema():
-    data = get_valid_input()
-    del data["execution_id"]
-    with pytest.raises(ValueError, match="Missing required keys"):
-        validate_schema(data)
+def test_phase1_valid():
+    def mock_pipeline(payload):
+        return payload
+        
+    res = validate_pipeline(mock_pipeline, get_valid_payload())
+    assert res["status"] == "PASS"
+    assert res.get("deterministic") is True
+    assert res.get("valid") is True
 
-def test_phase2_constraint_propagation():
-    data = get_valid_input()
-    # Remove propagation for B
-    data["propagation_results"] = data["propagation_results"][1:]
-    res = validate_pipeline(data)
-    violations = res["violations"]
-    assert any(v["type"] == "CONSTRAINT_PROPAGATION_MISMATCH" and v["task_id"] == "B" for v in violations)
-    assert not res["consistency_checks"]["constraint_propagation"]
+def test_phase1_schema_missing():
+    def mock_pipeline(payload):
+        import copy
+        out = copy.deepcopy(payload)
+        del out["keshav_output"]["impact_score"]
+        return out
+    
+    res = validate_pipeline(mock_pipeline, get_valid_payload())
+    assert res.get("deterministic") is False
+    assert res.get("reason") == "SCHEMA_VIOLATION"
+    assert "Missing:" in res.get("failed_field", "")
 
-def test_phase3_bottleneck_invalid():
-    data = get_valid_input()
-    # Make bottleneck point to a non-max impact task
-    data["bottleneck_output"]["task_id"] = "C"
-    data["bottleneck_output"]["impact_score"] = 5
-    res = validate_pipeline(data)
-    violations = res["violations"]
-    assert any(v["type"] == "BOTTLENECK_INVALID" and v["task_id"] == "C" for v in violations)
-    assert not res["consistency_checks"]["propagation_bottleneck"]
+def test_phase1_schema_extra():
+    def mock_pipeline(payload):
+        import copy
+        out = copy.deepcopy(payload)
+        out["keshav_output"]["extra_field"] = "bad"
+        return out
+        
+    res = validate_pipeline(mock_pipeline, get_valid_payload())
+    assert res.get("deterministic") is False
+    assert res.get("reason") == "SCHEMA_VIOLATION"
+    assert "Extra:" in res.get("failed_field", "")
 
-def test_phase4_root_cause():
-    data = get_valid_input()
-    # Root cause not in dependency chain
-    data["tasks"].append({"task_id": "X", "status": "DONE"})
-    data["bottleneck_output"]["root_cause"] = "X"
-    res = validate_pipeline(data)
-    violations = res["violations"]
-    assert any(v["type"] == "INVALID_ROOT_CAUSE" and v["task_id"] == "X" for v in violations)
-    assert not res["consistency_checks"]["root_cause_valid"]
+def test_phase1_schema_type():
+    def mock_pipeline(payload):
+        import copy
+        out = copy.deepcopy(payload)
+        out["keshav_output"]["impact_score"] = "150" # Should be int/float
+        return out
+        
+    res = validate_pipeline(mock_pipeline, get_valid_payload())
+    assert res.get("deterministic") is False
+    assert res.get("reason") == "SCHEMA_VIOLATION"
+    assert "Type mismatch" in res.get("failed_field", "")
 
-def test_phase5_unsatisfied_dependencies():
-    data = get_valid_input()
-    # A is marked as DONE, but it's listed as an unsatisfied dependency for B.
-    # This should trigger DEPENDENCY_MISMATCH.
-    res = validate_pipeline(data)
-    violations = res["violations"]
-    assert any(v["type"] == "DEPENDENCY_MISMATCH" and v["task_id"] == "B" for v in violations)
-    assert not res["consistency_checks"]["dependency_integrity"]
+def test_phase2_non_deterministic():
+    counter = [0]
+    def mock_pipeline(payload):
+        # We need a new dict to avoid mutation error in Phase 5
+        # Wait, if we return a new dict, Phase 5 passes.
+        import copy
+        out = copy.deepcopy(payload)
+        out["keshav_output"]["impact_score"] += counter[0]
+        counter[0] += 1
+        return out
+        
+    res = validate_pipeline(mock_pipeline, get_valid_payload())
+    assert res.get("deterministic") is False
+    assert res.get("reason") == "NON_DETERMINISTIC_OUTPUT"
+    assert "Mismatch" in res.get("diff", "")
 
+def test_phase3_trace_violation():
+    def mock_pipeline(payload):
+        import copy
+        out = copy.deepcopy(payload)
+        out["keshav_output"]["trace_id"] = "tr_999"
+        return out
+        
+    res = validate_pipeline(mock_pipeline, get_valid_payload())
+    assert res.get("deterministic") is False
+    assert res.get("reason") == "TRACE_VIOLATION"
 
+def test_phase4_diagnostics_constraint():
+    def mock_pipeline(payload):
+        import copy
+        out = copy.deepcopy(payload)
+        out["constraint_layer"]["status"] = "FAIL"
+        return out
+        
+    res = validate_pipeline(mock_pipeline, get_valid_payload())
+    assert res.get("status") == "FAIL"
+    assert res.get("layer") == "CONSTRAINT_LAYER"
+
+def test_phase4_diagnostics_propagation():
+    def mock_pipeline(payload):
+        import copy
+        out = copy.deepcopy(payload)
+        out["propagation_layer"]["status"] = "FAIL"
+        return out
+        
+    res = validate_pipeline(mock_pipeline, get_valid_payload())
+    assert res.get("status") == "FAIL"
+    assert res.get("layer") == "PROPAGATION_LAYER"
+
+def test_phase5_input_mutation():
+    def mock_pipeline(payload):
+        # Deliberately mutate the payload
+        payload["keshav_output"]["impact_score"] = 999
+        return payload
+        
+    res = validate_pipeline(mock_pipeline, get_valid_payload())
+    assert res.get("deterministic") is False
+    assert res.get("reason") == "INPUT_MUTATION_DETECTED"
