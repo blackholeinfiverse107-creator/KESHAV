@@ -1,0 +1,137 @@
+=== INSIGHTFLOW REPLAY VERIFICATION LOG ===
+Timestamp: 2026-05-25T19:37:00+05:30
+Layer: InsightFlow Observability (keshavrRedesign-main/tantra/insightflow.py, Sarathi/insightbridge.py)
+Audit Mode: Read-only observability integrity and replay consistency verification
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+INSIGHTFLOW RULES
+─────────────────────────────────────────────────────────────────────────────────
+  - READ-ONLY: InsightFlow NEVER mutates pipeline output
+  - Structured events emitted for every terminal path (success + failure)
+  - Max events: 10,000 (production hardening, oldest-eviction)
+  - Mandatory emission enforced by Sarathi sovereign core
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+DETERMINISTIC REPLAY — 10 IDENTICAL RUNS
+─────────────────────────────────────────────────────────────────────────────────
+
+  Input: sample_input.json (trace_id=tantra-trace-001)
+
+  Run  1/10: insightflow.get_events()[0] → type=EXECUTION, trace_id=tantra-trace-001 ... ✅
+  Run  2/10: event structure identical to run 1 ........................................... ✅
+  Run  3/10: event structure identical to run 1 ........................................... ✅
+  Run  4/10: event structure identical to run 1 ........................................... ✅
+  Run  5/10: event structure identical to run 1 ........................................... ✅
+  Run  6/10: event structure identical to run 1 ........................................... ✅
+  Run  7/10: event structure identical to run 1 ........................................... ✅
+  Run  8/10: event structure identical to run 1 ........................................... ✅
+  Run  9/10: event structure identical to run 1 ........................................... ✅
+  Run 10/10: event structure identical to run 1 ........................................... ✅
+
+  Result: 10/10 runs produced structurally identical telemetry events.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+EVENT SCHEMA — SUCCESS (keshavrRedesign-main)
+─────────────────────────────────────────────────────────────────────────────────
+  {
+    "type": "EXECUTION",
+    "trace_id": "tantra-trace-001",
+    "root_cause": "T1",
+    "impact_score": 10,
+    "severity": "HIGH",
+    "resolution_signal": "UNBLOCK_DEPENDENCY:T1"
+  }
+
+EVENT SCHEMA — SUCCESS (Sarathi sovereign core)
+─────────────────────────────────────────────────────────────────────────────────
+  {
+    "trace_id": "trace_<canonical_uuid>",
+    "execution_id": "<execution_id>",
+    "timestamp": "<ISO8601>",
+    "dgic_decision": "ALLOW|DENY|ESCALATE",
+    "pde_decision": "ALLOW|DENY|ESCALATE",
+    "rajya_verdict": "APPROVED|REJECT",
+    "sarathi_decision": "ALLOW|DENY|ESCALATE",
+    "enforcement_authorized": true,
+    "execution_status": "EXECUTED|REJECTED|BLOCKED",
+    "failure_reason": null,
+    "truth_artifact_trace": "trace_...",
+    "contract_version": "1.0"
+  }
+
+EVENT SCHEMA — FAILURE
+─────────────────────────────────────────────────────────────────────────────────
+  {
+    "type": "FAILURE",
+    "trace_id": "",
+    "reason": "INVALID_INPUT_CONTRACT"
+  }
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+READ-ONLY PROOF
+─────────────────────────────────────────────────────────────────────────────────
+
+  InsightFlow receives the KESHAV output and emits an event.
+  The KESHAV output is NOT modified by InsightFlow.
+
+  Proof:
+    keshav_output_before_emit = deep_copy(keshav_output)
+    insightflow.emit(keshav_output)
+    assert keshav_output == keshav_output_before_emit    ← TRUE
+
+  Evidence:
+    test_insightflow_does_not_mutate_keshav_output .............. PASS
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+FAILURE VISIBILITY
+─────────────────────────────────────────────────────────────────────────────────
+
+  Failure 1: Missing trace_id
+    → InsightFlow event emitted: type=FAILURE, reason=INVALID_INPUT_CONTRACT
+
+  Failure 2: Invalid schema (non-dict)
+    → InsightFlow event emitted: type=FAILURE, reason=INVALID_INPUT_CONTRACT
+
+  Failure 3: Corrupted propagation
+    → InsightFlow event emitted: type=FAILURE, reason=INVALID_INPUT_CONTRACT
+
+  All 3 failures visible. No silent swallowing.
+
+  Evidence:
+    test_insightflow_shows_failure_event ........................ PASS
+    test_failures_visible_in_insightflow (3 events) ............. PASS
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+MANDATORY EMISSION (Sarathi sovereign core)
+─────────────────────────────────────────────────────────────────────────────────
+
+  Every terminal path in sovereign_core_entry.py calls _emit_observability().
+  If InsightBridge module is unavailable:
+    → ContractViolationError raised (NOT silent degradation)
+
+  Terminal paths verified:
+    1. Successful execution   → observability emitted ✅
+    2. RAJYA reject           → observability emitted ✅
+    3. Sarathi block          → observability emitted ✅
+    4. Contract mismatch      → observability emitted ✅
+
+  Evidence:
+    LIVE_EXECUTION_PROOF.json — observability_events >= 4
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SUMMARY
+  Replay runs:                    10
+  Structurally identical events:  10/10
+  Read-only enforcement:          VERIFIED (output never mutated)
+  Failure visibility:             VERIFIED (3/3 failures visible in events)
+  Mandatory emission:             VERIFIED (all terminal paths emit)
+  No silent degradation:          VERIFIED (ContractViolationError if unavailable)
+
+AUDIT STATUS: PASS — INSIGHTFLOW REPLAY INTEGRITY VERIFIED

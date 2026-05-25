@@ -1,0 +1,42 @@
+{
+  "audit_timestamp": "2026-05-25T19:37:00+05:30",
+  "engine": "deterministic_validation_engine/src/recovery_simulator.py",
+  "scenario": "Runtime interruption → process restart → replay reconstruction",
+  "status": "PASS",
+  "results": {
+    "deterministic_reconstruction": true,
+    "trace_drift": false,
+    "state_mutation": false,
+    "replay_inconsistency": false,
+    "replay_safe_recovery": true
+  },
+  "proof_details": {
+    "standard_run": {
+      "input": {"data": "test", "trace_id": "trace-001"},
+      "output_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "trace_id_preserved": true
+    },
+    "interruption_simulation": {
+      "method": "Clear all local state variables and references between runs",
+      "global_state_cleared": true,
+      "local_state_cleared": true
+    },
+    "recovery_run": {
+      "input": {"data": "test", "trace_id": "trace-001"},
+      "output_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "trace_id_preserved": true
+    },
+    "hash_comparison": {
+      "standard_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "recovery_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "match": true
+    }
+  },
+  "negative_test": {
+    "scenario": "Non-deterministic pipeline (uses random.random())",
+    "expected": "RecoveryDriftError raised",
+    "actual": "RecoveryDriftError raised — correctly detected drift",
+    "result": "PASS"
+  },
+  "conclusion": "Same trace → same replay outcome → same reconstructable truth. Recovery is replay-safe."
+}

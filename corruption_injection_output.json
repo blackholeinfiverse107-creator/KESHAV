@@ -1,0 +1,67 @@
+{
+  "audit_timestamp": "2026-05-25T19:37:00+05:30",
+  "engine": "deterministic_validation_engine/src/corruption_injector.py",
+  "status": "PASS",
+  "fail_closed_verified": true,
+  "visible_rejection_reasoning": true,
+  "no_silent_recovery": true,
+  "no_partial_truth_persistence": true,
+  "deterministic_rejection_behavior": true,
+  "injections": [
+    {
+      "name": "schema_corruption",
+      "description": "Injected invalid_field key and changed trace_id to integer type",
+      "mutations_applied": [
+        "payload['invalid_field'] = 'malicious_data'",
+        "payload['trace_id'] = 12345"
+      ],
+      "expected_behavior": "Pipeline returns FAIL status with SCHEMA_CORRUPTION reason",
+      "actual_behavior": "Pipeline returned status=FAIL, reason=SCHEMA_CORRUPTION",
+      "fail_closed": true,
+      "bucket_write": false,
+      "insightflow_event": "FAILURE",
+      "result": "PASS"
+    },
+    {
+      "name": "trace_mutation",
+      "description": "Deleted trace_id from payload to simulate drift or external mutation",
+      "mutations_applied": [
+        "del payload['trace_id']"
+      ],
+      "expected_behavior": "Pipeline returns FAIL status with TRACE_MUTATION reason",
+      "actual_behavior": "Pipeline returned status=FAIL, reason=TRACE_MUTATION",
+      "fail_closed": true,
+      "bucket_write": false,
+      "insightflow_event": "FAILURE",
+      "result": "PASS"
+    },
+    {
+      "name": "propagation_mismatch",
+      "description": "Emptied propagation_results to create inconsistency between constraints and propagation",
+      "mutations_applied": [
+        "payload['propagation_results'] = []"
+      ],
+      "expected_behavior": "Pipeline returns FAIL status with PROPAGATION_MISMATCH reason",
+      "actual_behavior": "Pipeline returned status=FAIL, reason=PROPAGATION_MISMATCH",
+      "fail_closed": true,
+      "bucket_write": false,
+      "insightflow_event": "FAILURE",
+      "result": "PASS"
+    }
+  ],
+  "negative_test": {
+    "name": "loose_pipeline_detection",
+    "description": "Verified that a pipeline which does NOT fail-closed is correctly flagged as unsafe",
+    "pipeline_behavior": "Returns status=OK regardless of corruption",
+    "injector_response": "Raised Exception('Corruption did NOT fail closed!')",
+    "result": "PASS — correctly detected unsafe pipeline"
+  },
+  "summary": {
+    "total_injections": 3,
+    "injections_rejected": 3,
+    "silent_recoveries": 0,
+    "partial_truths_persisted": 0,
+    "pytest_tests_passed": 2,
+    "pytest_tests_failed": 0
+  }
+}

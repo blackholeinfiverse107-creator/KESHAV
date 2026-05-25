@@ -1,0 +1,22 @@
+{
+  "timestamp": "2026-05-14T15:11:19.584792+00:00",
+  "proof_type": "TRACE_REPLAY",
+  "original_trace_id": "trace_6841b50ba5a643c1",
+  "trace_propagation": {
+    "entry": "trace_6841b50ba5a643c1",
+    "dgic": null,
+    "pde": "trace_6841b50ba5a643c1",
+    "rajya": "trace_6841b50ba5a643c1",
+    "sarathi": "trace_6841b50ba5a643c1",
+    "enforcement": "trace_6841b50ba5a643c1",
+    "core": "trace_6841b50ba5a643c1",
+    "bucket": "trace_6841b50ba5a643c1",
+    "observability": "trace_6841b50ba5a643c1"
+  },
+  "trace_continuity_verified": false,
+  "replay_verification": {
+    "bucket_truth_available": true,
+    "truth_artifact_trace_matches": true,
+    "observability_trace_matches": true
+  }
+}

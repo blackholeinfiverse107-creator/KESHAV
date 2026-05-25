@@ -1,0 +1,7 @@
+{
+  "version": "1.0.0",
+  "confidence_threshold": 0.7,
+  "deny_conditions": ["hash_mismatch", "invalid_schema", "missing_execution_id"],
+  "escalation_conditions": ["low_confidence", "conflict", "policy_missing", "undefined_condition"],
+  "allow_conditions": ["all_validations_passed"]
+}
